@@ -3,6 +3,10 @@
 Nessus Report Parser — CLI tool for parsing Nessus CSV exports
 into prioritized remediation reports.
 
+Supports modern RBVM (Risk-Based Vulnerability Management) workflows by
+enriching findings with EPSS (exploit probability) and CISA KEV (known
+exploited vulns) before scoring.
+
 Author: Ryan Murphy
 """
 
@@ -12,6 +16,7 @@ from pathlib import Path
 from lib.parser import parse_nessus_csv
 from lib.scorer import calculate_priority_scores
 from lib.reporter import generate_report, generate_executive_summary
+from lib.enrichment import enrich_findings
 
 
 def main():
@@ -31,9 +36,9 @@ def main():
     )
     parser.add_argument(
         "--group-by",
-        choices=["host", "severity", "family"],
+        choices=["host", "severity", "family", "tier"],
         default="severity",
-        help="Group findings by: host, severity, or plugin family (default: severity)",
+        help="Group findings by: host, severity, family, or RBVM tier (default: severity)",
     )
     parser.add_argument(
         "--format",
@@ -56,6 +61,11 @@ def main():
         "--executive-summary",
         action="store_true",
         help="Generate executive summary with key metrics",
+    )
+    parser.add_argument(
+        "--no-enrich",
+        action="store_true",
+        help="Skip EPSS + CISA KEV enrichment (offline mode)",
     )
 
     args = parser.parse_args()
@@ -88,13 +98,16 @@ def main():
                 seen.add(key)
                 unique_findings.append(f)
         findings = unique_findings
-        print(f"[+] Deduplicated: {original_count} → {len(findings)} findings")
+        print(f"[+] Deduplicated: {original_count} -> {len(findings)} findings")
 
     # Filter by severity
     if args.severity:
         severity_filter = [s.strip().lower() for s in args.severity.split(",")]
         findings = [f for f in findings if f["severity"].lower() in severity_filter]
         print(f"[+] Filtered to {len(findings)} findings ({args.severity})")
+
+    # Enrich with EPSS + KEV before scoring (so score reflects real-world risk)
+    findings = enrich_findings(findings, offline=args.no_enrich)
 
     # Calculate priority scores
     findings = calculate_priority_scores(findings)
@@ -111,7 +124,7 @@ def main():
 
     # Write output
     if args.output:
-        Path(args.output).write_text(output)
+        Path(args.output).write_text(output, encoding="utf-8")
         print(f"[+] Report saved to {args.output}")
     else:
         print(output)
